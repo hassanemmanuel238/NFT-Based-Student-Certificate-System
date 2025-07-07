@@ -10,6 +10,12 @@
 (define-constant ERR_INSTITUTION_NOT_FOUND (err u106))
 (define-constant ERR_INSTITUTION_INACTIVE (err u107))
 
+(define-constant BADGE_NOVICE u1)
+(define-constant BADGE_SCHOLAR u2)
+(define-constant BADGE_EXPERT u3)
+(define-constant BADGE_MASTER u4)
+(define-constant BADGE_LEGEND u5)
+
 (define-data-var next-certificate-id uint u1)
 (define-data-var next-institution-id uint u1)
 
@@ -210,6 +216,8 @@
     
     (var-set next-certificate-id (+ certificate-id u1))
     
+    (try! (check-and-award-badges student-address))
+    
     (ok certificate-id)
   )
 )
@@ -248,7 +256,10 @@
     
     (let
       (
-        (old-owner-certs (filter-out-certificate (get-student-certificates current-owner) certificate-id))
+        (old-owner-certs (begin
+          (var-set target-cert-filter certificate-id)
+          (filter-out-certificate (get-student-certificates current-owner) certificate-id)
+        ))
         (new-owner-certs (get-student-certificates new-owner))
       )
       (map-set student-certificates current-owner old-owner-certs)
@@ -261,13 +272,15 @@
   )
 )
 
-(define-private (filter-out-certificate (cert-list (list 50 uint)) (cert-id uint))
+(define-private (filter-out-certificate (cert-list (list 50 uint)) (target-cert-id uint))
   (filter is-not-target-cert cert-list)
 )
 
 (define-private (is-not-target-cert (cert-id uint))
-  (not (is-eq cert-id cert-id))
+  (not (is-eq cert-id (var-get target-cert-filter)))
 )
+
+(define-data-var target-cert-filter uint u0)
 
 (define-public (get-certificate-metadata (certificate-id uint))
   (match (map-get? certificates certificate-id)
@@ -297,4 +310,110 @@
 
 (define-read-only (get-total-institutions)
   (- (var-get next-institution-id) u1)
+)
+
+
+
+(define-map badge-definitions
+  uint
+  {
+    name: (string-ascii 50),
+    description: (string-ascii 200),
+    requirement: uint,
+    icon: (string-ascii 100)
+  }
+)
+
+(define-map student-badges principal (list 10 uint))
+(define-map badge-holders uint (list 1000 principal))
+
+(define-private (initialize-badges)
+  (begin
+    (map-set badge-definitions BADGE_NOVICE {
+      name: "Certificate Novice",
+      description: "Earned your first certificate - the journey begins!",
+      requirement: u1,
+      icon: "GRAD"
+    })
+    (map-set badge-definitions BADGE_SCHOLAR {
+      name: "Academic Scholar",
+      description: "Collected 5 certificates - showing real dedication!",
+      requirement: u5,
+      icon: "BOOK"
+    })
+    (map-set badge-definitions BADGE_EXPERT {
+      name: "Domain Expert",
+      description: "Achieved 10 certificates - you're becoming an expert!",
+      requirement: u10,
+      icon: "TROPHY"
+    })
+    (map-set badge-definitions BADGE_MASTER {
+      name: "Learning Master",
+      description: "Accumulated 20 certificates - mastery in action!",
+      requirement: u20,
+      icon: "STAR"
+    })
+    (map-set badge-definitions BADGE_LEGEND {
+      name: "Education Legend",
+      description: "Reached 50 certificates - legendary achievement!",
+      requirement: u50,
+      icon: "CROWN"
+    })
+    (ok true)
+  )
+)
+
+(initialize-badges)
+
+(define-read-only (get-badge-definition (badge-id uint))
+  (map-get? badge-definitions badge-id)
+)
+
+(define-read-only (get-student-badges (student principal))
+  (default-to (list) (map-get? student-badges student))
+)
+
+(define-read-only (get-badge-holders (badge-id uint))
+  (default-to (list) (map-get? badge-holders badge-id))
+)
+
+(define-read-only (has-badge (student principal) (badge-id uint))
+  (is-some (index-of (get-student-badges student) badge-id))
+)
+
+(define-private (award-badge (student principal) (badge-id uint))
+  (let
+    (
+      (current-badges (get-student-badges student))
+      (current-holders (get-badge-holders badge-id))
+    )
+    (if (has-badge student badge-id)
+      (ok false)
+      (begin
+        (map-set student-badges student
+          (unwrap! (as-max-len? (append current-badges badge-id) u10) (err u999))
+        )
+        (map-set badge-holders badge-id
+          (unwrap! (as-max-len? (append current-holders student) u1000) (err u999))
+        )
+        (ok true)
+      )
+    )
+  )
+)
+
+(define-private (check-and-award-badges (student principal))
+  (let
+    (
+      (cert-count (get-certificate-count-by-student student))
+    )
+    (begin
+      (if (>= cert-count u50) (try! (award-badge student BADGE_LEGEND)) false)
+      (if (>= cert-count u20) (try! (award-badge student BADGE_MASTER)) false)
+      (if (>= cert-count u10) (try! (award-badge student BADGE_EXPERT)) false)
+      (if (>= cert-count u5) (try! (award-badge student BADGE_SCHOLAR)) false)
+      (if (>= cert-count u1) (try! (award-badge student BADGE_NOVICE)) false)
+      (ok true)
+    )
+  )
 )
