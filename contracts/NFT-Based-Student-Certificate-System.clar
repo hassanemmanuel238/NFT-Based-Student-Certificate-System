@@ -417,3 +417,116 @@
     )
   )
 )
+
+(define-constant ERR_CANNOT_ENDORSE_OWN_CERT (err u108))
+(define-constant ERR_ALREADY_ENDORSED (err u109))
+(define-constant ERR_ENDORSEMENT_NOT_FOUND (err u110))
+
+(define-data-var next-endorsement-id uint u1)
+
+(define-map endorsements
+  uint
+  {
+    certificate-id: uint,
+    endorser: principal,
+    endorser-title: (string-utf8 100),
+    credibility-score: uint,
+    testimonial: (string-utf8 500),
+    endorsed-at: uint
+  }
+)
+
+(define-map certificate-endorsements uint (list 20 uint))
+(define-map endorser-profile principal { verified: bool, reputation: uint })
+
+(define-read-only (get-endorsement (endorsement-id uint))
+  (map-get? endorsements endorsement-id)
+)
+
+(define-read-only (get-certificate-endorsements (certificate-id uint))
+  (default-to (list) (map-get? certificate-endorsements certificate-id))
+)
+
+(define-read-only (get-endorser-profile (endorser principal))
+  (default-to { verified: false, reputation: u0 } (map-get? endorser-profile endorser))
+)
+
+(define-read-only (calculate-endorsement-score (certificate-id uint))
+  (fold + (map get-endorsement-weight (get-certificate-endorsements certificate-id)) u0)
+)
+
+(define-private (get-endorsement-weight (endorsement-id uint))
+  (match (map-get? endorsements endorsement-id)
+    endorsement (get credibility-score endorsement)
+    u0
+  )
+)
+
+(define-public (endorse-certificate 
+  (certificate-id uint)
+  (endorser-title (string-utf8 100))
+  (credibility-score uint)
+  (testimonial (string-utf8 500))
+)
+  (let
+    (
+      (endorsement-id (var-get next-endorsement-id))
+      (certificate (unwrap! (map-get? certificates certificate-id) ERR_CERTIFICATE_NOT_FOUND))
+      (current-endorsements (get-certificate-endorsements certificate-id))
+    )
+    (asserts! (not (is-eq tx-sender (get student-address certificate))) ERR_CANNOT_ENDORSE_OWN_CERT)
+    (asserts! (not (get revoked certificate)) ERR_REVOKED)
+    (asserts! (<= credibility-score u100) ERR_INVALID_PARAMS)
+    (asserts! (> (len endorser-title) u0) ERR_INVALID_PARAMS)
+    (asserts! (is-none (index-of-endorser current-endorsements tx-sender)) ERR_ALREADY_ENDORSED)
+    
+    (map-set endorsements endorsement-id
+      {
+        certificate-id: certificate-id,
+        endorser: tx-sender,
+        endorser-title: endorser-title,
+        credibility-score: credibility-score,
+        testimonial: testimonial,
+        endorsed-at: stacks-block-height
+      }
+    )
+    
+    (map-set certificate-endorsements certificate-id
+      (unwrap! (as-max-len? (append current-endorsements endorsement-id) u20) ERR_INVALID_PARAMS)
+    )
+    
+    (var-set next-endorsement-id (+ endorsement-id u1))
+    (unwrap! (update-endorser-reputation tx-sender) (err u999))
+    
+    (ok endorsement-id)
+  )
+)
+
+(define-private (index-of-endorser (endorsement-list (list 20 uint)) (target-endorser principal))
+  (fold check-endorser-match endorsement-list none)
+)
+
+(define-private (check-endorser-match (endorsement-id uint) (found (optional uint)))
+  (if (is-some found)
+    found
+    (match (map-get? endorsements endorsement-id)
+      endorsement (if (is-eq (get endorser endorsement) (var-get target-endorser-check)) (some endorsement-id) none)
+      none
+    )
+  )
+)
+
+(define-data-var target-endorser-check principal 'SP000000000000000000002Q6VF78)
+
+(define-private (update-endorser-reputation (endorser principal))
+  (let
+    (
+      (current-profile (get-endorser-profile endorser))
+      (new-reputation (+ (get reputation current-profile) u1))
+    )
+    (map-set endorser-profile endorser
+      (merge current-profile { reputation: new-reputation })
+    )
+    (ok true)
+  )
+)
