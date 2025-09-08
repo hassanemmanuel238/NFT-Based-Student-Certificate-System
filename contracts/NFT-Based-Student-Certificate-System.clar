@@ -16,6 +16,10 @@
 (define-constant BADGE_MASTER u4)
 (define-constant BADGE_LEGEND u5)
 
+(define-constant ERR_CERTIFICATE_EXPIRED (err u111))
+(define-constant ERR_NOT_RENEWABLE (err u112))
+(define-constant NEVER_EXPIRES u0)
+
 (define-data-var next-certificate-id uint u1)
 (define-data-var next-institution-id uint u1)
 
@@ -527,6 +531,125 @@
     (map-set endorser-profile endorser
       (merge current-profile { reputation: new-reputation })
     )
+    (ok true)
+  )
+)
+
+
+(define-map certificate-expiry
+  uint
+  {
+    expiry-date: uint,
+    renewable: bool,
+    renewal-period: uint,
+    grace-period: uint
+  }
+)
+
+(define-map expired-certificates uint bool)
+
+(define-read-only (get-certificate-expiry (certificate-id uint))
+  (map-get? certificate-expiry certificate-id)
+)
+
+(define-read-only (is-certificate-expired (certificate-id uint))
+  (match (map-get? certificate-expiry certificate-id)
+    expiry-info
+    (if (is-eq (get expiry-date expiry-info) NEVER_EXPIRES)
+      false
+      (> stacks-block-height (get expiry-date expiry-info))
+    )
+    false
+  )
+)
+
+(define-read-only (is-certificate-in-grace-period (certificate-id uint))
+  (match (map-get? certificate-expiry certificate-id)
+    expiry-info
+    (if (is-eq (get expiry-date expiry-info) NEVER_EXPIRES)
+      false
+      (let
+        (
+          (expiry-date (get expiry-date expiry-info))
+          (grace-period (get grace-period expiry-info))
+          (grace-end (+ expiry-date grace-period))
+        )
+        (and 
+          (> stacks-block-height expiry-date)
+          (<= stacks-block-height grace-end)
+        )
+      )
+    )
+    false
+  )
+)
+
+(define-read-only (get-certificate-validity-status (certificate-id uint))
+  (let
+    (
+      (certificate (map-get? certificates certificate-id))
+      (is-expired (is-certificate-expired certificate-id))
+      (in-grace (is-certificate-in-grace-period certificate-id))
+    )
+    (if (is-none certificate)
+      (err ERR_CERTIFICATE_NOT_FOUND)
+      (if (get revoked (unwrap-panic certificate))
+        (ok "REVOKED")
+        (if is-expired
+          (if in-grace (ok "GRACE_PERIOD") (ok "EXPIRED"))
+          (ok "VALID")
+        )
+      )
+    )
+  )
+)
+
+(define-public (set-certificate-expiry
+  (certificate-id uint)
+  (expiry-date uint)
+  (renewable bool)
+  (renewal-period uint)
+  (grace-period uint)
+)
+  (let
+    (
+      (certificate (unwrap! (map-get? certificates certificate-id) ERR_CERTIFICATE_NOT_FOUND))
+      (institution-id (unwrap! (map-get? institution-admins tx-sender) ERR_NOT_AUTHORIZED))
+    )
+    (asserts! (is-eq (get institution-id certificate) institution-id) ERR_NOT_AUTHORIZED)
+    (asserts! (not (get revoked certificate)) ERR_REVOKED)
+    
+    (map-set certificate-expiry certificate-id
+      {
+        expiry-date: expiry-date,
+        renewable: renewable,
+        renewal-period: renewal-period,
+        grace-period: grace-period
+      }
+    )
+    (ok true)
+  )
+)
+
+(define-public (renew-certificate (certificate-id uint))
+  (let
+    (
+      (certificate (unwrap! (map-get? certificates certificate-id) ERR_CERTIFICATE_NOT_FOUND))
+      (expiry-info (unwrap! (map-get? certificate-expiry certificate-id) ERR_CERTIFICATE_NOT_FOUND))
+      (institution-id (unwrap! (map-get? institution-admins tx-sender) ERR_NOT_AUTHORIZED))
+    )
+    (asserts! (is-eq (get institution-id certificate) institution-id) ERR_NOT_AUTHORIZED)
+    (asserts! (not (get revoked certificate)) ERR_REVOKED)
+    (asserts! (get renewable expiry-info) ERR_NOT_RENEWABLE)
+    (asserts! (is-certificate-expired certificate-id) ERR_INVALID_PARAMS)
+    
+    (map-set certificate-expiry certificate-id
+      (merge expiry-info 
+        { expiry-date: (+ stacks-block-height (get renewal-period expiry-info)) }
+      )
+    )
+    
+    (map-delete expired-certificates certificate-id)
     (ok true)
   )
 )
