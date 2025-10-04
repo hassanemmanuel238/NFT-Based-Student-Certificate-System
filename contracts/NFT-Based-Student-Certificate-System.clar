@@ -653,3 +653,74 @@
     (ok true)
   )
 )
+
+(define-constant SKILL_BEGINNER u1)
+(define-constant SKILL_INTERMEDIATE u2)
+(define-constant SKILL_ADVANCED u3)
+(define-constant SKILL_EXPERT u4)
+
+(define-constant ERR_SKILL_NOT_FOUND (err u113))
+(define-constant ERR_MAX_SKILLS_REACHED (err u114))
+
+(define-map certificate-skills
+  uint
+  (list 10 { skill-name: (string-utf8 50), proficiency: uint })
+)
+
+(define-map skill-registry
+  (string-utf8 50)
+  (list 100 { certificate-id: uint, student: principal, proficiency: uint })
+)
+
+(define-read-only (get-certificate-skills (certificate-id uint))
+  (default-to (list) (map-get? certificate-skills certificate-id))
+)
+
+(define-read-only (get-skill-holders (skill-name (string-utf8 50)))
+  (default-to (list) (map-get? skill-registry skill-name))
+)
+
+(define-read-only (get-proficiency-name (level uint))
+  (if (is-eq level SKILL_BEGINNER) "Beginner"
+    (if (is-eq level SKILL_INTERMEDIATE) "Intermediate"
+      (if (is-eq level SKILL_ADVANCED) "Advanced"
+        (if (is-eq level SKILL_EXPERT) "Expert" "Unknown")
+      )
+    )
+  )
+)
+
+(define-public (attach-skills-to-certificate
+  (certificate-id uint)
+  (skills (list 10 { skill-name: (string-utf8 50), proficiency: uint }))
+)
+  (let
+    (
+      (certificate (unwrap! (map-get? certificates certificate-id) ERR_CERTIFICATE_NOT_FOUND))
+      (institution-id (unwrap! (map-get? institution-admins tx-sender) ERR_NOT_AUTHORIZED))
+    )
+    (asserts! (is-eq (get institution-id certificate) institution-id) ERR_NOT_AUTHORIZED)
+    (asserts! (not (get revoked certificate)) ERR_REVOKED)
+    
+    (map-set certificate-skills certificate-id skills)
+    (register-skills-in-registry certificate-id (get student-address certificate) skills)
+    (ok true)
+  )
+)
+
+(define-private (register-skills-in-registry
+  (cert-id uint)
+  (student principal)
+  (skills (list 10 { skill-name: (string-utf8 50), proficiency: uint }))
+)
+  (map register-single-skill-helper skills)
+)
+
+(define-private (register-single-skill-helper (skill { skill-name: (string-utf8 50), proficiency: uint }))
+  (let
+    (
+      (current-holders (get-skill-holders (get skill-name skill)))
+    )
+    true
+  )
+)
