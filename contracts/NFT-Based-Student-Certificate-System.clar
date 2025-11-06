@@ -20,6 +20,19 @@
 (define-constant ERR_NOT_RENEWABLE (err u112))
 (define-constant NEVER_EXPIRES u0)
 
+(define-constant GRADE_A_PLUS u100)
+(define-constant GRADE_A u95)
+(define-constant GRADE_A_MINUS u90)
+(define-constant GRADE_B_PLUS u85)
+(define-constant GRADE_B u80)
+(define-constant GRADE_B_MINUS u75)
+(define-constant GRADE_C u70)
+(define-constant GRADE_D u60)
+(define-constant GRADE_DEFAULT u50)
+
+(define-constant ENDORSEMENT_WEIGHT u5)
+(define-constant SKILL_DIVERSITY_WEIGHT u3)
+
 (define-data-var next-certificate-id uint u1)
 (define-data-var next-institution-id uint u1)
 
@@ -722,5 +735,89 @@
       (current-holders (get-skill-holders (get skill-name skill)))
     )
     true
+  )
+)
+
+
+(define-map student-performance-score principal uint)
+(define-map global-leaderboard uint principal)
+(define-map institution-leaderboard { institution-id: uint, rank: uint } principal)
+(define-map student-rank principal { global-rank: uint, institution-rank: uint })
+
+(define-data-var global-leaderboard-size uint u0)
+
+(define-read-only (get-grade-score (grade (string-ascii 10)))
+  (if (is-eq grade "A+") GRADE_A_PLUS
+    (if (is-eq grade "A") GRADE_A
+      (if (is-eq grade "A-") GRADE_A_MINUS
+        (if (is-eq grade "B+") GRADE_B_PLUS
+          (if (is-eq grade "B") GRADE_B
+            (if (is-eq grade "B-") GRADE_B_MINUS
+              (if (is-eq grade "C") GRADE_C
+                (if (is-eq grade "D") GRADE_D GRADE_DEFAULT)
+              )
+            )
+          )
+        )
+      )
+    )
+  )
+)
+
+(define-private (calculate-student-score (student principal))
+  (let
+    (
+      (cert-ids (get-student-certificates student))
+      (total-certs (len cert-ids))
+      (grade-score (fold sum-certificate-grades cert-ids u0))
+      (endorsement-score (* (fold count-endorsements cert-ids u0) ENDORSEMENT_WEIGHT))
+      (skill-count (count-unique-skills student))
+      (skill-score (* skill-count SKILL_DIVERSITY_WEIGHT))
+    )
+    (+ grade-score endorsement-score skill-score)
+  )
+)
+
+(define-private (sum-certificate-grades (cert-id uint) (acc uint))
+  (match (map-get? certificates cert-id)
+    cert (+ acc (get-grade-score (get grade cert)))
+    acc
+  )
+)
+
+(define-private (count-endorsements (cert-id uint) (acc uint))
+  (+ acc (len (get-certificate-endorsements cert-id)))
+)
+
+(define-private (count-unique-skills (student principal))
+  (len (fold collect-skills (get-student-certificates student) (list)))
+)
+
+(define-private (collect-skills (cert-id uint) (skills-acc (list 100 (string-utf8 50))))
+  skills-acc
+)
+
+(define-public (update-student-score (student principal))
+  (let
+    (
+      (new-score (calculate-student-score student))
+    )
+    (map-set student-performance-score student new-score)
+    (ok new-score)
+  )
+)
+
+(define-read-only (get-student-score (student principal))
+  (default-to u0 (map-get? student-performance-score student))
+)
+
+(define-read-only (get-top-students (limit uint))
+  (ok (list (map-get? global-leaderboard u1) (map-get? global-leaderboard u2) (map-get? global-leaderboard u3)))
+)
+
+(define-read-only (get-student-global-rank (student principal))
+  (match (map-get? student-rank student)
+    rank-info (ok (get global-rank rank-info))
+    (ok u0)
   )
 )
